@@ -1,3 +1,3 @@
-from .value import Value
+from .value import Value, Tensor
 
-__all__ = ["Value"]
+__all__ = ["Value", "Tensor"]
