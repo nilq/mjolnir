@@ -1,31 +1,11 @@
 import ctypes
 import math
-import numpy as np
-from llvmlite import ir
-from typing import Union, Iterable
+from typing import Iterable, Union
 
 import llvmlite.binding as llvm
-import ctypes
-
+import numpy as np
 import ops
-
-
-llvm.initialize()
-llvm.initialize_native_target()
-llvm.initialize_native_asmprinter()
-
-_target: llvm.Target = llvm.Target.from_default_triple()
-
-target_machine: llvm.TargetMachine = _target.create_target_machine()
-engine: llvm.ExecutionEngine = llvm.create_mcjit_compiler(
-    llvm.parse_assembly(""), target_machine
-)
-optimizer: llvm.ModulePassManager = llvm.ModulePassManager()
-
-builder = llvm.PassManagerBuilder()
-builder.opt_level = 3
-builder.loop_vectorize = True
-builder.populate(optimizer)
+from llvmlite import ir
 
 
 def discrete_llvm_op(buffer, op) -> float:
@@ -59,72 +39,30 @@ def discrete_llvm_op(buffer, op) -> float:
     return result
 
 
-def tensor_llvm_op(target: "Tensor", sources: list["Tensor"], op: str):
-        module = ir.Module(name=__file__)
-
-        # LLVM to store resulting value of operation applied to given sources.
-        # All the inputs are pointers, first one is the target.
-        fn = ir.Function(module, ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.FloatType())] * (1 + len(sources))), name="op")
-
-        start_builder = ir.IRBuilder(fn.append_basic_block(name="entry"))
-        body_builder = ir.IRBuilder(fn.append_basic_block(name="inner"))
-        exit_builder = ir.IRBuilder(fn.append_basic_block(name="exit"))
-
-        start_builder.branch(body_builder._block)
-        exit_builder.ret_void()
-
-        start_i = ir.Constant(ir.IntType(32), 0)
-        end_i = ir.Constant(ir.IntType(32), math.prod(target.shape))
-
-        phi = body_builder.phi(ir.IntType(32))
-        phi.add_incoming(start_i, start_builder.block)
-
-        ###
-
-        r, a, b = fn.args
-        ap = body_builder.load(body_builder.gep(a, [phi]))
-        bp = body_builder.load(body_builder.gep(b, [phi]))
-
-        val = ops.OPS_LOOKUP[op](body_builder, ap, bp)
-        body_builder.store(val, body_builder.gep(r, [phi]))
-
-        ###
-
-        phi_new = body_builder.add(phi, ir.Constant(ir.IntType(32), 1))
-        phi.add_incoming(phi_new, body_builder.block)
-
-        body_builder.cbranch(body_builder.icmp_unsigned("==", phi, end_i), exit_builder.block, body_builder.block)
-
-        llvm_ir = str(module)
-
-        print(llvm_ir)
-
-        llvm_module = llvm.parse_assembly(llvm_ir)
-        llvm_module.verify()
-
-        engine.add_module(llvm_module)
-        engine.finalize_object()
-        engine.run_static_constructors()
-
-        fn_pointer = engine.get_function_address("op")
-        source_buffers = [target._buffer] + [x._buffer for x in sources]
-
-        arg_types = [ctypes.POINTER(ctypes.c_float) for _ in sources]
-        cfunc = ctypes.CFUNCTYPE(*arg_types)(fn_pointer)
-
-        cfunc(*source_buffers)
-
-        return target
-
-
 class Tensor:
     def __init__(self, content: Union[list, np.ndarray]) -> None:
-        content = content if isinstance(content, np.ndarray) else np.asarray(content, np.float32)
+        content = (
+            content
+            if isinstance(content, np.ndarray)
+            else np.asarray(content, np.float32)
+        )
 
         self.shape: (float, ...) = content.shape
         self._buffer = (ctypes.c_float * math.prod(self.shape))()
 
-        ctypes.memmove(self._buffer, content.astype(np.float32).ctypes.data, math.prod(self.shape) * 4)
+        ctypes.memmove(
+            self._buffer,
+            content.astype(np.float32).ctypes.data,
+            math.prod(self.shape) * 4,
+        )
+
+    @property
+    def content(self):
+        return (
+            np.ctypeslib.as_array(self._buffer)[: math.prod(self.shape)]
+            .reshape(self.shape)
+            .copy()
+        )
 
     def llvm_binary_op(
         self, other: Union[list, np.ndarray, "Tensor"], op: str
@@ -137,8 +75,17 @@ class Tensor:
         other, out = self.llvm_binary_op(other, "+")
         return out
 
+    def __sub__(self, other: Union[list, np.ndarray, "Tensor"]):
+        other, out = self.llvm_binary_op(other, "-")
+        return out
+
+    def __mul__(self, other: Union[list, np.ndarray, "Tensor"]):
+        other, out = self.llvm_binary_op(other, "*")
+        return out
+
     def __repr__(self):
-        return f"Tensor{self.shape}"
+        return f"Tensor({self.content})".replace("\n", "")
+
 
 class Value:
     """Stupid JIT'ed auto-grad'ed value."""
@@ -206,7 +153,9 @@ class Value:
     def __pow__(self, other: Union[int, float]) -> "Value":
         assert isinstance(other, (int, float)), "TODO: Value powers."
 
-        out: "Value" = Value(discrete_llvm_op([self.content, other], "**"), (self,), "**")
+        out: "Value" = Value(
+            discrete_llvm_op([self.content, other], "**"), (self,), "**"
+        )
 
         def backward() -> None:
             self.gradient += (other * self.content ** (other - 1)) * out.gradient
@@ -231,4 +180,4 @@ if __name__ == "__main__":
 
     # This is definitely correct.
     # I am the new linear algebra professor.
-    print("Result:", list(test._buffer))
+    print(test)

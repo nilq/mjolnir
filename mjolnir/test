@@ -1,0 +1,9 @@
+a * b + c * d + x
+
++
+    + tmp
+        * tmp_1
+            a b
+        * tmp_1
+            c d
+    x
