@@ -178,10 +178,10 @@ def flatten_buffer_operations(buffers: list[LLVMBuffer], *args):
                 buffer_right, body_builder, node.incoming[1], shape, level + 1
             )
 
-        operand_left = buffer_left or buffers[level]
-        operand_right = buffer_right or buffers[level + 1]
+        operand_left = buffer_left if buffer_left else buffers[level]
+        operand_right = buffer_right if buffer_right else buffers[level + 1]
 
-        length = ir.Constant(ir.IntType(32), math.prod(shape))
+        length = ir.Constant(ir.IntType(32), math.prod(shape) - 1)
 
         body_builder.call(
             body_builder.module.globals[f"primitive[{node.op}]"],
@@ -213,8 +213,6 @@ def jit_flat_tensor_op(module: ir.Module, root: Node, shape: (int, ...)) -> LLVM
     start_builder.branch(body_builder._block)
     exit_builder.ret_void()
 
-    # Recursively walk nodes from root to compile calls
-    # - need buffer for each operation, so it can be passed on to the next.
     target = fn.args[0]
     flatten_buffer_operations(fn.args[1:], target, body_builder, root, shape)
 

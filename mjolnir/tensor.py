@@ -59,10 +59,10 @@ class Tensor:
 
 
 if __name__ == "__main__":
-    a = Tensor([[1, 2], [3, 4]])
+    a = Tensor([[1, 1], [1, 1]])
     d = Tensor([[2, 2], [2, 2]])
 
-    test = d * (d * d) * d
+    test = a * a * a + a + d
 
     print(test)
 
