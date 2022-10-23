@@ -1,7 +1,5 @@
 import ctypes
-import itertools
 import math
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Union
 
 import llvmlite.binding as llvm
@@ -10,6 +8,8 @@ from llvmlite import ir
 
 if TYPE_CHECKING:
     from tensor import Tensor
+
+from . import graph
 
 
 class LLVMBuffer:
@@ -34,22 +34,6 @@ class LLVMBuffer:
             np.ctypeslib.as_array(self.buffer)[: math.prod(self.shape)]
             .reshape(self.shape)
             .copy()
-        )
-
-
-@dataclass
-class Node:
-    op: str
-    incoming: (Union["Node", LLVMBuffer], ...)
-
-    def buffers(self) -> list[LLVMBuffer]:
-        return list(
-            itertools.chain(
-                *[
-                    [x.buffer] if not isinstance(x, Node) else x.buffers()
-                    for x in self.incoming
-                ]
-            )
         )
 
 
@@ -79,11 +63,14 @@ def ir_int32(n: int) -> ir.Constant:
     return ir.Constant(ir.IntType(32), n)
 
 
-BINARY_OPS = {
+BINARY_TENSOR_OPS = {
     "+": lambda ir_builder, *args: ir_builder.fadd(*args),
     "-": lambda ir_builder, *args: ir_builder.fsub(*args),
     "*": lambda ir_builder, *args: ir_builder.fmul(*args),
     "/": lambda ir_builder, *args: ir_builder.fdiv(*args),
+}
+
+BINARY_OPS = {
     "**": lambda ir_builder, *args: ir_builder.call(
         ir_builder._block.module.declare_intrinsic("llvm.pow", [ir.FloatType()]), args
     ),
@@ -95,7 +82,12 @@ UNARY_OPS = {
     ),
 }
 
-OPS_LOOKUP = {"": lambda ir_builder, *args: args, **BINARY_OPS, **UNARY_OPS}  # Noop.
+OPS_LOOKUP = {
+    "": lambda ir_builder, *args: args,
+    **BINARY_TENSOR_OPS,
+    **BINARY_OPS,
+    **UNARY_OPS,
+}
 
 
 def _build_primitive_op(module: ir.Module, op: str) -> None:
@@ -142,7 +134,7 @@ def _build_primitive_op(module: ir.Module, op: str) -> None:
 def create_module(name: str = __file__) -> ir.Module:
     module: ir.Module = ir.Module(name=name)
 
-    for op in BINARY_OPS:
+    for op in BINARY_TENSOR_OPS:
         _build_primitive_op(module, op)
 
     return module
@@ -152,7 +144,7 @@ def flatten_buffer_operations(buffers: list[LLVMBuffer], *args):
     def compile_tree_into(
         target,
         body_builder: ir.IRBuilder,
-        node: Union["Tensor", Node],
+        root: Union["Tensor", graph.Node],
         shape,
         level: int = 0,
     ):
@@ -160,22 +152,22 @@ def flatten_buffer_operations(buffers: list[LLVMBuffer], *args):
 
         buffer_left, buffer_right = None, None
 
-        if isinstance(node.incoming[0], Node):
+        if isinstance(root.incoming[0], graph.Node):
             buffer_left = body_builder.alloca(
                 ir.FloatType(), math.prod(shape), name=f"tmp_{level}_left"
             )
             # Compiling downwards, storing into left value buffer
             compile_tree_into(
-                buffer_left, body_builder, node.incoming[0], shape, level + 1
+                buffer_left, body_builder, root.incoming[0], shape, level + 1
             )
 
-        if isinstance(node.incoming[1], Node):
+        if isinstance(root.incoming[1], graph.Node):
             buffer_right = body_builder.alloca(
                 ir.FloatType(), math.prod(shape), name=f"tmp_{level}_right"
             )
 
             compile_tree_into(
-                buffer_right, body_builder, node.incoming[1], shape, level + 1
+                buffer_right, body_builder, root.incoming[1], shape, level + 1
             )
 
         operand_left = buffer_left if buffer_left else buffers[level]
@@ -184,18 +176,23 @@ def flatten_buffer_operations(buffers: list[LLVMBuffer], *args):
         length = ir.Constant(ir.IntType(32), math.prod(shape) - 1)
 
         body_builder.call(
-            body_builder.module.globals[f"primitive[{node.op}]"],
+            body_builder.module.globals[f"primitive[{root.op}]"],
             [target, operand_left, operand_right, length],
         )
 
     compile_tree_into(*args)
 
 
-def jit_flat_tensor_op(module: ir.Module, root: Node, shape: (int, ...)) -> LLVMBuffer:
-    result: LLVMBuffer = LLVMBuffer(np.zeros(shape))
+def jit_flat_tensor_op(
+    module: ir.Module, root: graph.Node, shape: (int, ...)
+) -> LLVMBuffer:
+    result: LLVMBuffer = LLVMBuffer(np.empty(shape))
     buffers = root.buffers()
 
-    print(buffers)
+    # Scary, scary.
+    if "main" in module.globals:
+        del module.globals["main"]
+        module.scope._useset.remove("main")
 
     fn = ir.Function(
         module,
@@ -219,8 +216,6 @@ def jit_flat_tensor_op(module: ir.Module, root: Node, shape: (int, ...)) -> LLVM
     body_builder.branch(exit_builder.block)
 
     llvm_ir = str(module)
-
-    print(llvm_ir)
 
     llvm_module = llvm.parse_assembly(llvm_ir)
     llvm_module.verify()

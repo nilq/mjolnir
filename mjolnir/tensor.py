@@ -1,11 +1,13 @@
 import math
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union, Iterable
 
-import compiler
+from . import compiler, graph
 import numpy as np
-from compiler import LLVMBuffer, Node
 
-Operable = Union[list, np.ndarray, Node, "Tensor"]
+if TYPE_CHECKING:
+    from .graph import Node
+
+Operable = Union[list, np.ndarray, "Node", "Tensor"]
 
 
 class Tensor:
@@ -13,64 +15,71 @@ class Tensor:
         self.gradient: Optional["Tensor"] = None
         self.requires_grad = requires_grad
 
-        self.buffer = LLVMBuffer(content)
+        self._buffer = compiler.LLVMBuffer(content)
+
+    @classmethod
+    def zeros(cls, shape: Iterable[int], **kwargs) -> "Tensor":
+        return cls(np.zeros(shape, dtype=np.float32), **kwargs)
+
+    @classmethod
+    def ones(cls, shape: Iterable[int], **kwargs) -> "Tensor":
+        return cls(np.ones(shape, dtype=np.float32), **kwargs)
+
+    @classmethod
+    def eye(cls, shape: int | Iterable[int], **kwargs) -> "Tensor":
+        rows, cols = (shape, shape) if isinstance(shape, int) else shape
+        return cls(np.eye(rows, cols, dtype=np.float32), **kwargs)
+
+    @classmethod
+    def empty(cls, shape: Iterable[int], **kwargs) -> "Tensor":
+        return cls(np.empty(shape, dtype=np.float32), **kwargs)
 
     @property
     def content(self):
         return (
-            np.ctypeslib.as_array(self.buffer.buffer)[: math.prod(self.shape)]
+            np.ctypeslib.as_array(self._buffer.buffer)[: math.prod(self.shape)]
             .reshape(self.shape)
             .copy()
         )
 
     @property
     def shape(self) -> (int, int):
-        return self.buffer.shape
+        return self._buffer.shape
 
-    def __add__(self, other: Operable):
+    def __add__(self, other: Operable) -> "Node":
         out = self._binary_op(other, "+")
         return out
 
-    def __mul__(self, other: Operable):
+    def __sub__(self, other: Operable) -> "Node":
+        out = self._binary_op(other, "-")
+        return out
+
+    def __mul__(self, other: Operable) -> "Node":
         out = self._binary_op(other, "*")
         return out
 
-    def __radd__(self, other: Operable):
+    def __truediv__(self, other: Operable) -> "Node":
+        out = self._binary_op(other, "/")
+        return out
+
+    def __radd__(self, other: Operable) -> "Node":
         out = self._binary_op(other, "+")
         return out
 
-    def __rmul__(self, other: Operable):
+    def __rsub__(self, other: Operable) -> "Node":
+        out = self._binary_op(other, "-")
+        return out
+
+    def __rmul__(self, other: Operable) -> "Node":
         out = self._binary_op(other, "*")
         return out
 
-    def __repr__(self):
+    def __rtruediv__(self, other: Operable) -> "Node":
+        out = self._binary_op(other, "/")
+        return out
+
+    def __repr__(self) -> str:
         return f"Tensor<{self.shape}>"
 
-    def _binary_op(self, other: Operable, op: str) -> Node:
-        return Node(op=op, incoming=(self, other))
-
-    def _jit_binary_op(
-        self, other: Union[list, np.ndarray, "Tensor"], op: str
-    ) -> ("Tensor", "Tensor"):
-        other: "Tensor" = other if isinstance(other, Tensor) else Tensor(other)
-        target: "Tensor" = Tensor(np.zeros(self.shape))
-
-        return other, compiler.tensor_llvm_op(target, [self, other], op)
-
-
-if __name__ == "__main__":
-    a = Tensor([[1, 1], [1, 1]])
-    d = Tensor([[2, 2], [2, 2]])
-
-    test = a * a * a + a + d
-
-    print(test)
-
-    mod = compiler.create_module("tissemand")
-    test2 = compiler.jit_flat_tensor_op(mod, test, a.shape)
-
-    c = Tensor(test2.numpy())
-
-    print()
-    print(c)
-    print(c.buffer.numpy())
+    def _binary_op(self, other: Operable, op: str) -> "Node":
+        return graph.Node(op=op, incoming=(self, other), shape=self.shape)

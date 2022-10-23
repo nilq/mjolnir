@@ -2,48 +2,49 @@
 
 A (for now) quite primitive, but JIT'ed autograd.
 
-## Plan
+## Roadmap
 
-- [ ] ~~Values~~ Proper *Tensors*.
-- [ ] Torch-like nn-modules.
-- [ ] Convolutions.
-- [ ] Criterions, optimizers.
+- [x] Simple tensors.
+- [ ] Gradients.
+- [ ] Criterions/optimizers.
+- [ ] Torch-like modules.
 
 ## For now
 
-### Values with gradients
+### Simple tensor operations
 
 ```python
-import math
-from mjolnir import Value
-
-a = Value(math.pi)
-b = Value(2)
-
-c = a**2 / (b * 10)
-
-c.backward()
-
-print(c)
-```
-
-```
-Value(0.49348026514053345, gradient=1.0)
-```
-
-### Tensors with no Jacobians
-
-Needs proper views, graphs with gradient computations and more ... 
-
-```python
-from mjolnir import Tensor
+from mjolnir.tensor import Tensor
 
 a = Tensor([[1, 2], [3, 4]])
-b = Tensor([[1, 1], [1, 1]])
+b = Tensor.ones((2, 2))
 
-print(a + b)
+summed = (a + b).tensor
+```
+
+### Computation graph
+
+```
+from mjolnir.tensor import Tensor
+
+a = Tensor.ones([5, 5])
+b = Tensor.eye([5, 5])
+c = Tensor([[1, 2, 3, 4, 5]] * 5)
+
+graph = ((a + b + c) * (c - b - a))
+graph.print()
 ```
 
 ```
-Tensor(2, 2)
+(*):
+  (+):
+    (+):
+      Tensor<(5, 5)>
+      Tensor<(5, 5)>
+    Tensor<(5, 5)>
+  (-):
+    (-):
+      Tensor<(5, 5)>
+      Tensor<(5, 5)>
+    Tensor<(5, 5)>
 ```
