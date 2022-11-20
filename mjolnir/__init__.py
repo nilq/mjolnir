@@ -1,7 +1,7 @@
-from . import compiler, graph, tensor
+from . import compiler, tensor
 from .tensor import Tensor
 
-__all__ = ["compiler", "tensor", "graph"]
+__all__ = ["compiler", "tensor"]
 
 
 def matmul(a: Tensor, b: Tensor) -> Tensor:
