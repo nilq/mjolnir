@@ -24,7 +24,7 @@ summed = (a + b).tensor
 
 ### Computation graph
 
-```
+```python
 from mjolnir.tensor import Tensor
 
 a = Tensor.ones([5, 5])
