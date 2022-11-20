@@ -2,7 +2,6 @@ import numpy as np
 
 from mjolnir.tensor import Tensor
 
-
 a = Tensor([[1, 2, 3], [4, 5, 6]])
 ones = Tensor.ones(a.shape)
 

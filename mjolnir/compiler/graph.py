@@ -1,32 +1,37 @@
+"""Module containing simple computation graph."""
+from __future__ import annotations
+
 import functools
 import itertools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional, Union
 
-from . import compiler, tensor
-
-if TYPE_CHECKING:
-    from llvmlite import ir
-
-    from .compiler import LLVMBuffer
+from mjolnir import tensor
+from mjolnir.compiler.types import DataType
+from mjolnir.compiler import compiler
+from llvmlite import ir
 
 
 global_module: Optional["ir.Module"] = None
 
 
+NodeType = Union[tensor.Tensor, "Node"]
+
+
 @dataclass
 class Node:
     op: str
-    incoming: (Union["Node", "LLVMBuffer"], ...)
-    shape: (int, ...)
+    incoming: list[Node | compiler.LLVMBuffer]
+    shape: tuple[int, ...]
+    dtype: DataType
 
     def __post_init__(self):
         global global_module
 
         if global_module is None:
-            global_module = compiler.create_module("global_module")
+            global_module = compiler.populate_global_module("global_module")
 
-    def buffers(self) -> list["LLVMBuffer"]:
+    def buffers(self) -> list[compiler.LLVMBuffer]:
         return list(
             itertools.chain(
                 *[
@@ -39,9 +44,9 @@ class Node:
     @functools.cached_property
     def tensor(self) -> tensor.Tensor:
         return tensor.Tensor(
-            compiler.jit_flat_tensor_op(
+            compiler.jit_graph(
                 global_module, self, self.incoming[0].shape
-            ).numpy()
+            ).to_numpy()
         )
 
     def print(self) -> None:
@@ -59,13 +64,13 @@ class Node:
         _print(self)
 
     @classmethod
-    def _build_binary_op(cls, op: str):
+    def build_binary_op(cls, op: str):
         def binary(self, other):
-            return cls(op=op, incoming=(self, other), shape=self.shape)
+            return cls(op=op, incoming=[self, other], shape=self.shape, dtype=self.dtype)
 
         return binary
 
 
 for name, op in [("add", "+"), ("sub", "-"), ("mul", "*"), ("truediv", "/")]:
-    setattr(Node, f"__{name}__", Node._build_binary_op(op))
-    setattr(Node, f"__r{name}__", Node._build_binary_op(op))
+    setattr(Node, f"__{name}__", Node.build_binary_op(op))
+    setattr(Node, f"__r{name}__", Node.build_binary_op(op))

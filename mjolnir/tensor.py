@@ -1,38 +1,55 @@
-import math
-from typing import TYPE_CHECKING, Optional, Union, Iterable
+"""A somewhat lacking tensor module."""
+from __future__ import annotations
 
-from . import compiler, graph
+import math
+from typing import Iterable, Optional, Union
+
 import numpy as np
 
-if TYPE_CHECKING:
-    from .graph import Node
+from mjolnir.compiler.buffer import LLVMBuffer
+from mjolnir.compiler import graph
+from mjolnir.compiler.types import BrainFloat16, DataType
 
-Operable = Union[list, np.ndarray, "Node", "Tensor"]
+Operable: type = Union["Node", "Tensor", LLVMBuffer]
 
 
 class Tensor:
-    def __init__(self, content: list | np.ndarray, requires_grad: bool = False) -> None:
-        self.gradient: Optional["Tensor"] = None
+    def __init__(
+        self,
+        content: Iterable,
+        requires_grad: bool = False,
+        dtype: DataType = BrainFloat16(),
+    ) -> None:
+        self.gradient: Optional[Tensor] = None
         self.requires_grad = requires_grad
+        self.dtype = dtype
 
-        self._buffer = compiler.LLVMBuffer(content)
-
-    @classmethod
-    def zeros(cls, shape: Iterable[int], **kwargs) -> "Tensor":
-        return cls(np.zeros(shape, dtype=np.float32), **kwargs)
+        self._buffer = LLVMBuffer(content, dtype=dtype)
 
     @classmethod
-    def ones(cls, shape: Iterable[int], **kwargs) -> "Tensor":
-        return cls(np.ones(shape, dtype=np.float32), **kwargs)
+    def zeros(
+        cls, shape: Iterable[int], dtype: Optional[DataType] = None, **kwargs
+    ) -> Tensor:
+        return cls(np.zeros(shape, dtype=dtype), **kwargs)
 
     @classmethod
-    def eye(cls, shape: int | Iterable[int], **kwargs) -> "Tensor":
+    def ones(
+        cls, shape: Iterable[int], dtype: Optional[DataType] = None, **kwargs
+    ) -> Tensor:
+        return cls(np.ones(shape, dtype=dtype), **kwargs)
+
+    @classmethod
+    def eye(
+        cls, shape: int | Iterable[int], dtype: Optional[DataType] = None, **kwargs
+    ) -> Tensor:
         rows, cols = (shape, shape) if isinstance(shape, int) else shape
-        return cls(np.eye(rows, cols, dtype=np.float32), **kwargs)
+        return cls(np.eye(rows, cols, dtype), **kwargs)
 
     @classmethod
-    def empty(cls, shape: Iterable[int], **kwargs) -> "Tensor":
-        return cls(np.empty(shape, dtype=np.float32), **kwargs)
+    def empty(
+        cls, shape: Iterable[int], dtype: Optional[DataType] = None, **kwargs
+    ) -> Tensor:
+        return cls(np.empty(shape, dtype=dtype), **kwargs)
 
     @property
     def content(self):
@@ -43,43 +60,19 @@ class Tensor:
         )
 
     @property
-    def shape(self) -> (int, int):
+    def shape(self) -> tuple[int, ...]:
         return self._buffer.shape
-
-    def __add__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "+")
-        return out
-
-    def __sub__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "-")
-        return out
-
-    def __mul__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "*")
-        return out
-
-    def __truediv__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "/")
-        return out
-
-    def __radd__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "+")
-        return out
-
-    def __rsub__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "-")
-        return out
-
-    def __rmul__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "*")
-        return out
-
-    def __rtruediv__(self, other: Operable) -> "Node":
-        out = self._binary_op(other, "/")
-        return out
 
     def __repr__(self) -> str:
         return f"Tensor<{self.shape}>"
 
-    def _binary_op(self, other: Operable, op: str) -> "Node":
-        return graph.Node(op=op, incoming=(self, other), shape=self.shape)
+
+def _build_binary_op(op: str):
+    def binary(self, other):
+        return graph.Node(op=op, incoming=[self, other], shape=self.shape, dtype=self.dtype)
+
+    return binary
+
+for name, op in {"add": "+", "sub": "-", "mul": "*", "truediv": "/"}.items():
+    setattr(Tensor, f"__{name}__", _build_binary_op(op))
+    setattr(Tensor, f"__r{name}__", _build_binary_op(op))
